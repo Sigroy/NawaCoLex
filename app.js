@@ -262,7 +262,7 @@ function renderEntry(entry) {
 
     <div class="tabs">
       <button class="tab active" data-tab="resumen" type="button">Resumen</button>
-      <button class="tab" data-tab="completo" type="button">Marcadores</button>
+      <button class="tab" data-tab="completo" type="button">Completo</button>
     </div>
 
     <div id="tab_resumen"></div>
@@ -326,7 +326,7 @@ function renderEntry(entry) {
         <div class="v">${escapeHtml(b.value)}</div>
       </div>
     `).join("")
-        : `<div class="emptyState"><h2>Sin campos principales</h2><p class="muted">Abre “Marcadores” para ver todo.</p></div>`;
+        : `<div class="emptyState"><h2>Sin campos principales</h2><p class="muted">Abre “Completo” para ver todo.</p></div>`;
 
     // completo: todo, ordenado por items para respetar el SFM
     const completo = $("#tab_completo");
