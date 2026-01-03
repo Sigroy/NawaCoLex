@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="es">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>NawatCoLex — Diccionario</title>
+    <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+<div class="app">
+    <header class="topbar">
+        <div class="brand">
+            <div class="logo" aria-hidden="true">N</div>
+            <div class="brand-text">
+                <div class="brand-title">NawatCoLex</div>
+                <div class="brand-subtitle">Diccionario náwat (Nawat)</div>
+            </div>
+        </div>
+
+        <div class="topbar-actions">
+            <button id="themeToggle" class="btn ghost" type="button" title="Cambiar tema">🌙</button>
+            <a class="btn ghost" href="#/bibliografia" title="Bibliografía">📚</a>
+        </div>
+    </header>
+
+    <main class="layout">
+        <section class="panel left">
+            <div class="searchCard">
+                <div class="searchRow">
+                    <input id="q" class="searchInput" type="search" placeholder="Buscar por palabra, variante, glosa (es/en)..." autocomplete="off" />
+                    <button id="clearBtn" class="btn" type="button">Limpiar</button>
+                </div>
+
+                <div class="filters">
+                    <label class="field">
+                        <span>Modo</span>
+                        <select id="mode">
+                            <option value="smart" selected>Inteligente</option>
+                            <option value="prefix">Empieza con</option>
+                            <option value="contains">Contiene</option>
+                            <option value="exact">Exacto</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Fuente</span>
+                        <select id="sourceFilter">
+                            <option value="all" selected>Todas</option>
+                        </select>
+                    </label>
+
+                    <label class="field">
+                        <span>Máx. resultados</span>
+                        <select id="limit">
+                            <option>25</option>
+                            <option selected>50</option>
+                            <option>100</option>
+                            <option>200</option>
+                        </select>
+                    </label>
+                </div>
+
+                <div class="metaRow">
+                    <div id="status" class="status">Cargando JSON…</div>
+                    <div class="pill" id="countPill" title="Entradas indexadas">0</div>
+                </div>
+            </div>
+
+            <div class="resultsHeader">
+                <div class="resultsTitle">Resultados</div>
+                <div class="resultsHint">Tip: clic para abrir · Enter para ir al primero</div>
+            </div>
+
+            <div id="results" class="results" role="list"></div>
+        </section>
+
+        <section class="panel right">
+            <div id="detail" class="detail">
+                <div class="emptyState">
+                    <div class="emptyIcon">🔎</div>
+                    <h2>Busca una palabra</h2>
+                    <p>Escribe en la barra de búsqueda. Se buscan:</p>
+                    <ul>
+                        <li>Headword (lx)</li>
+                        <li>Variantes (va), ortografía de la fuente (lz)</li>
+                        <li>Glosas en español (gn) e inglés (ge)</li>
+                    </ul>
+                    <p class="muted">Después añadimos búsqueda por morfemas/prefijos/sufijos.</p>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer class="footer">
+        <div>
+            Hecho para GitHub Pages · Datos: JSON generado desde SFM/MDF
+        </div>
+        <div class="muted">
+            Consejo: abre el sitio desde un servidor (GitHub Pages). En local con file:// puede fallar el fetch.
+        </div>
+    </footer>
+</div>
+
+<script src="./app.js"></script>
+</body>
+</html>
