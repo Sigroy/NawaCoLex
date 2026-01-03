@@ -264,6 +264,10 @@ select{
     display:flex;
     gap: 10px;
     margin-bottom: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    white-space: nowrap;
+    -webkit-overflow-scrolling: touch;
 }
 .tab{
     padding: 8px 10px;
@@ -273,6 +277,9 @@ select{
     cursor:pointer;
     font-size: 13px;
     color: var(--muted);
+}
+.tabs .tab{
+    flex: 0 0 auto;
 }
 .tab.active{
     background: rgba(124,92,255,0.16);

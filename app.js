@@ -4,9 +4,13 @@ const state = {
     data: null,
     sourcesById: new Map(),
     markerDefs: {},
-    entries: [],        // lista plana de entradas para buscar
-    byId: new Map(),    // id -> entry
-    activeId: null,
+    entries: [],            // entradas planas (por si luego querés debug)
+    byId: new Map(),        // entryId -> entry
+    groups: [],             // lista de lemas agrupados
+    byGroupKey: new Map(),  // groupKey -> group
+    activeGroupKey: null,
+    activeSourceId: null,
+    activeVariantByKey: new Map(), // `${groupKey}|${sourceId}` -> index
     lastResults: [],
     theme: "dark",
 };
@@ -77,11 +81,6 @@ function fold(str) {
     }
 }
 
-// Crea un id estable y corto para enlazar
-function makeId(sourceId, recordIndex) {
-    return `${sourceId}:${recordIndex}`;
-}
-
 // Heurística: filtra “headers” tipo Campbell_LX (st -1)
 function isHousekeeping(record) {
     const st = record?.fields?.st;
@@ -119,6 +118,7 @@ function getSearchText(record) {
     pushAll("de");
     // también subentradas pueden ayudar
     pushAll("se");
+
     return fold(parts.join(" · "));
 }
 
@@ -128,7 +128,7 @@ function scoreMatch(q, rec) {
     const lz = fold(firstField(rec, "lz") || "");
     const gn = fold(joinField(rec, "gn") || "");
     const ge = fold(joinField(rec, "ge") || "");
-    const all = rec._search;
+    const all = rec._search || "";
 
     if (!q) return 0;
 
@@ -154,59 +154,10 @@ function scoreMatch(q, rec) {
     return score;
 }
 
-function renderResults(results) {
-    const el = $("#results");
-    el.innerHTML = "";
-
-    if (!results.length) {
-        el.innerHTML = `<div class="emptyState" style="margin:8px;">
-      <div class="emptyIcon">🫥</div>
-      <h2>Sin resultados</h2>
-      <p>Prueba con otra ortografía o usa “Contiene”.</p>
-    </div>`;
-        return;
-    }
-
-    for (const r of results) {
-        const hw = escapeHtml(r.headword || "");
-        const gn = escapeHtml((r.fields?.gn?.[0] || r.fields?.dn?.[0] || r.fields?.ge?.[0] || "").slice(0, 120));
-        const srcName = escapeHtml(state.sourcesById.get(r.source_id)?.name || r.source_id);
-
-        const div = document.createElement("div");
-        div.className = "resultItem" + (r.id === state.activeId ? " active" : "");
-        div.setAttribute("role", "listitem");
-        div.tabIndex = 0;
-        div.dataset.id = r.id;
-
-        div.innerHTML = `
-      <div style="flex:1; min-width:0;">
-        <div class="hw">${hw}</div>
-        <div class="snip">${gn || "<span class='muted'>(sin glosa)</span>"}</div>
-        <div class="badge">${srcName}</div>
-      </div>
-      <div style="color: var(--faint); font-family: var(--mono); font-size: 11px; padding-top:2px;">
-        ${escapeHtml(String(r.record_index))}
-      </div>
-    `;
-
-        div.addEventListener("click", () => openEntry(r.id));
-        div.addEventListener("keydown", (e) => {
-            if (e.key === "Enter" || e.key === " ") {
-                e.preventDefault();
-                openEntry(r.id);
-            }
-        });
-
-        el.appendChild(div);
-    }
-}
-
-function buildFieldRows(record, ordered = false) {
-    // ordered=false: agrupa por marker
-    // ordered=true: respeta el orden original (items)
+function buildFieldRows(record) {
     const rows = [];
 
-    if (ordered && Array.isArray(record.items)) {
+    if (Array.isArray(record.items) && record.items.length) {
         for (const it of record.items) {
             const mk = it.marker;
             const label = markerLabel(mk);
@@ -219,40 +170,260 @@ function buildFieldRows(record, ordered = false) {
         return rows;
     }
 
+    // fallback si no hay items
     const fields = record.fields || {};
     const keys = Object.keys(fields).sort((a, b) => a.localeCompare(b));
     for (const mk of keys) {
         const label = markerLabel(mk);
         const vals = fields[mk] || [];
-        rows.push({k: label, code: mk, v: vals.join("\n\n")});
+        rows.push({ k: label, code: mk, v: vals.join("\n\n") });
     }
     return rows;
 }
 
-function renderEntry(entry) {
+/* =========================
+   AGRUPACIÓN POR LEMA
+   ========================= */
+
+function groupKeyForEntry(entry) {
+    // Para agrupar "kwawit" una sola vez: usamos el lema (lx/headword) normalizado
+    const hw = entry.headword || firstField(entry, "lx") || "";
+    return fold(hw);
+}
+
+function pickBestSnippetFromEntry(entry) {
+    const gn = entry.fields?.gn?.[0];
+    const dn = entry.fields?.dn?.[0];
+    const ge = entry.fields?.ge?.[0];
+    const de = entry.fields?.de?.[0];
+
+    return gn || dn || ge || de || "";
+}
+
+function shortSourceName(sourceId) {
+    const s = state.sourcesById.get(sourceId);
+    return (s?.name || sourceId).trim();
+}
+
+function buildGroups(entries) {
+    const byKey = new Map();
+
+    for (const e of entries) {
+        const key = groupKeyForEntry(e);
+        if (!key) continue;
+
+        if (!byKey.has(key)) {
+            const display = (e.headword || firstField(e, "lx") || "").trim() || "(sin lema)";
+            byKey.set(key, {
+                key,
+                display,
+                bySource: new Map(),  // sourceId -> [entries]
+                entries: [],
+                _search: "",
+                _headwordsFold: new Set(),
+            });
+        }
+
+        const g = byKey.get(key);
+        g.entries.push(e);
+        g._headwordsFold.add(fold(e.headword || firstField(e, "lx") || ""));
+
+        if (!g.bySource.has(e.source_id)) g.bySource.set(e.source_id, []);
+        g.bySource.get(e.source_id).push(e);
+    }
+
+    // computar _search por grupo
+    for (const g of byKey.values()) {
+        const all = [];
+        for (const e of g.entries) all.push(e._search || "");
+        g._search = all.join(" · ");
+    }
+
+    // ordenar fuentes dentro de cada grupo (por nombre)
+    for (const g of byKey.values()) {
+        for (const [sid, arr] of g.bySource.entries()) {
+            arr.sort((a, b) => {
+                // si hay hm, úsalo, si no, record_index
+                const ahm = parseInt(firstField(a, "hm") || "0", 10);
+                const bhm = parseInt(firstField(b, "hm") || "0", 10);
+                if (ahm !== bhm) return ahm - bhm;
+                return (a.record_index || 0) - (b.record_index || 0);
+            });
+        }
+    }
+
+    // convertir a lista ordenada (alfabético por display)
+    const list = Array.from(byKey.values()).sort((a, b) => a.display.localeCompare(b.display));
+
+    state.byGroupKey = byKey;
+    state.groups = list;
+}
+
+/* =========================
+   RESULTADOS (1 POR LEMA)
+   ========================= */
+
+function renderResults(groups) {
+    const el = $("#results");
+    el.innerHTML = "";
+
+    if (!groups.length) {
+        el.innerHTML = `<div class="emptyState" style="margin:8px;">
+      <div class="emptyIcon">🫥</div>
+      <h2>Sin resultados</h2>
+      <p>Prueba con otra ortografía o usa “Contiene”.</p>
+    </div>`;
+        return;
+    }
+
+    for (const g of groups) {
+        const hw = escapeHtml(g.display || "");
+        // snippet: mejor de cualquiera de sus entradas
+        let snippet = "";
+        for (const e of g.entries) {
+            const s = pickBestSnippetFromEntry(e);
+            if (s) { snippet = s; break; }
+        }
+        const snip = escapeHtml((snippet || "").slice(0, 120));
+
+        // fuentes (badge)
+        const sourceIds = Array.from(g.bySource.keys());
+        sourceIds.sort((a, b) => shortSourceName(a).localeCompare(shortSourceName(b)));
+
+        const maxShown = 3;
+        const shown = sourceIds.slice(0, maxShown).map(shortSourceName);
+        const rest = sourceIds.length - shown.length;
+        const badge = escapeHtml(rest > 0 ? `${shown.join(" · ")} · +${rest}` : shown.join(" · "));
+
+        const div = document.createElement("div");
+        div.className = "resultItem" + (g.key === state.activeGroupKey ? " active" : "");
+        div.setAttribute("role", "listitem");
+        div.tabIndex = 0;
+        div.dataset.key = g.key;
+
+        div.innerHTML = `
+      <div style="flex:1; min-width:0;">
+        <div class="hw">${hw}</div>
+        <div class="snip">${snip || "<span class='muted'>(sin glosa)</span>"}</div>
+        <div class="badge">${badge || "—"}</div>
+      </div>
+      <div style="color: var(--faint); font-family: var(--mono); font-size: 11px; padding-top:2px;">
+        ${escapeHtml(String(sourceIds.length))}×
+      </div>
+    `;
+
+        div.addEventListener("click", () => openGroup(g.key));
+        div.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                openGroup(g.key);
+            }
+        });
+
+        el.appendChild(div);
+    }
+}
+
+function openGroup(groupKey, sourceId = null) {
+    state.activeGroupKey = groupKey;
+
+    const g = state.byGroupKey.get(groupKey);
+    if (!g) return;
+
+    // si vienen con sourceId, respetalo; si no, elegí uno razonable
+    let sid = sourceId;
+    if (!sid) {
+        const currentFilter = $("#sourceFilter")?.value;
+        if (currentFilter && currentFilter !== "all" && g.bySource.has(currentFilter)) {
+            sid = currentFilter;
+        } else {
+            // primera fuente por nombre
+            const sids = Array.from(g.bySource.keys()).sort((a, b) => shortSourceName(a).localeCompare(shortSourceName(b)));
+            sid = sids[0] || null;
+        }
+    }
+
+    state.activeSourceId = sid;
+
+    // ruta estable (incluye fuente para link exacto)
+    if (sid) {
+        location.hash = `#/lema/${encodeURIComponent(groupKey)}/${encodeURIComponent(sid)}`;
+    } else {
+        location.hash = `#/lema/${encodeURIComponent(groupKey)}`;
+    }
+
+    renderResults(state.lastResults);
+}
+
+/* =========================
+   DETALLE (TABS POR FUENTE)
+   ========================= */
+
+function variantKey(groupKey, sourceId) {
+    return `${groupKey}|${sourceId}`;
+}
+
+function getVariantIndex(groupKey, sourceId, max) {
+    const k = variantKey(groupKey, sourceId);
+    let idx = state.activeVariantByKey.get(k) ?? 0;
+    if (idx < 0) idx = 0;
+    if (idx >= max) idx = 0;
+    return idx;
+}
+
+function setVariantIndex(groupKey, sourceId, idx) {
+    const k = variantKey(groupKey, sourceId);
+    state.activeVariantByKey.set(k, idx);
+}
+
+function renderGroup(groupKey, preferredSourceId = null) {
     const detail = $("#detail");
-    const src = state.sourcesById.get(entry.source_id);
-    const srcName = src?.name || entry.source_id;
-    const biblio = src?.bibliography || "";
+    const g = state.byGroupKey.get(groupKey);
 
-    const hw = entry.headword || firstField(entry, "lx") || "(sin lema)";
-    const ps = firstField(entry, "ps");
-    const di = firstField(entry, "di");
-    const lz = firstField(entry, "lz");
-    const gn = joinField(entry, "gn");
-    const ge = joinField(entry, "ge");
+    if (!g) {
+        detail.innerHTML = `<div class="emptyState">
+      <div class="emptyIcon">⚠️</div>
+      <h2>Lema no encontrado</h2>
+      <p class="muted">Puede que el enlace sea viejo o la base de datos haya cambiado.</p>
+    </div>`;
+        return;
+    }
 
-    const headerSub = [
-        ps ? `• ${ps}` : "",
-        di ? `• Dialecto: ${di}` : "",
-        lz ? `• lz: ${lz}` : "",
-        `• Fuente: ${srcName}`
-    ].filter(Boolean).join(" ");
+    // elegir fuente activa
+    const sourceIds = Array.from(g.bySource.keys()).sort((a, b) => shortSourceName(a).localeCompare(shortSourceName(b)));
+    let activeSid = preferredSourceId && g.bySource.has(preferredSourceId) ? preferredSourceId : state.activeSourceId;
+    if (!activeSid || !g.bySource.has(activeSid)) activeSid = sourceIds[0] || null;
+    state.activeSourceId = activeSid;
+    state.activeGroupKey = groupKey;
+
+    // entrada activa dentro de la fuente (por si hay homónimos)
+    const variants = activeSid ? (g.bySource.get(activeSid) || []) : [];
+    const vIdx = activeSid ? getVariantIndex(groupKey, activeSid, variants.length) : 0;
+    const entry = variants[vIdx] || null;
+
+    // header
+    const sourcesLine = sourceIds.map(shortSourceName).join(" · ");
+    const title = escapeHtml(g.display);
+
+    // meta del entry (depende de fuente)
+    let headerSub = "";
+    let biblio = "";
+    if (entry) {
+        const src = state.sourcesById.get(entry.source_id);
+        const srcName = src?.name || entry.source_id;
+        biblio = src?.bibliography || "";
+
+        const ps = firstField(entry, "ps");
+        const di = firstField(entry, "di");
+        const lz = firstField(entry, "lz");
+    } else {
+        headerSub = `Fuentes: ${sourcesLine}`;
+    }
 
     detail.innerHTML = `
     <div class="detailHeader">
       <div class="detailTitle">
-        <h1>${escapeHtml(hw)}</h1>
+        <h1>${title}</h1>
         <div class="sub">${escapeHtml(headerSub)}</div>
       </div>
       <div style="display:flex; gap:10px; align-items:center;">
@@ -260,115 +431,98 @@ function renderEntry(entry) {
       </div>
     </div>
 
-    <div class="tabs">
-      <button class="tab active" data-tab="resumen" type="button">Resumen</button>
-      <button class="tab" data-tab="completo" type="button">Completo</button>
+    <div class="tabs" id="sourceTabs">
+      ${sourceIds.map((sid) => {
+        const active = sid === activeSid ? "active" : "";
+        const name = escapeHtml(shortSourceName(sid));
+        return `<button class="tab ${active}" data-source="${escapeHtml(sid)}" type="button">${name}</button>`;
+    }).join("")}
     </div>
 
-    <div id="tab_resumen"></div>
-    <div id="tab_completo" style="display:none;"></div>
+    ${variants.length > 1 ? `
+      <div style="margin: 10px 0 14px; display:flex; gap:10px; align-items:center;">
+        <div class="muted" style="font-size:12px; font-weight:700;">Variante</div>
+        <select id="variantSelect" style="max-width: 360px;">
+          ${variants.map((v, i) => {
+        const hm = firstField(v, "hm");
+        const label = hm ? `Homónimo ${hm}` : `Entrada ${v.record_index}`;
+        const selected = i === vIdx ? "selected" : "";
+        return `<option value="${i}" ${selected}>${escapeHtml(label)}</option>`;
+    }).join("")}
+        </select>
+      </div>
+    ` : ""}
 
-    <div class="sectionTitle">Bibliografía</div>
-    <div class="kvRow">
-      <div class="k">Fuente</div>
-      <div class="v">${escapeHtml(biblio || srcName)}</div>
-    </div>
+    <div id="entryFields"></div>
+
+    ${entry ? `
+      <div class="sectionTitle">Bibliografía</div>
+      <div class="kvRow">
+        <div class="k">Fuente</div>
+        <div class="v">${escapeHtml(biblio || shortSourceName(entry.source_id))}</div>
+      </div>
+    ` : ""}
   `;
 
-    // resumen: muestra lo más útil primero (sin perder nada)
-    const resumen = $("#tab_resumen");
-    const blocks = [];
-
-    const addIf = (mk, titleOverride = null) => {
-        const v = entry.fields?.[mk];
-        if (Array.isArray(v) && v.length) {
-            blocks.push({
-                label: titleOverride || markerLabel(mk),
-                code: mk,
-                value: v.join("\n\n"),
-            });
-        }
-    };
-
-    // Prioridad (tú puedes ajustar)
-    addIf("gn");
-    addIf("ge");
-    addIf("dn");
-    addIf("de");
-    addIf("ps");
-    addIf("va");
-    addIf("ph");
-    addIf("pl");
-    addIf("po");
-    addIf("uv");
-    addIf("un");
-    addIf("ue");
-    addIf("se");
-
-    // Ejemplos
-    addIf("xv");
-    addIf("xn");
-    addIf("xe");
-
-    // Notas / etimología
-    addIf("ec");
-    addIf("et");
-    addIf("ee");
-    addIf("en");
-    addIf("nt");
-    addIf("ng");
-    addIf("nd");
-
-    resumen.innerHTML = blocks.length
-        ? blocks.map(b => `
+    // render fields (todo, sin resumen)
+    const entryFields = $("#entryFields");
+    if (!entry) {
+        entryFields.innerHTML = `<div class="emptyState">
+      <div class="emptyIcon">🧩</div>
+      <h2>Sin contenido</h2>
+      <p class="muted">Este lema no tiene registros asociados.</p>
+    </div>`;
+    } else {
+        const rows = buildFieldRows(entry);
+        entryFields.innerHTML = rows.map(r => `
       <div class="kvRow">
-        <div class="k">${escapeHtml(b.label)} <code>${escapeHtml(b.code)}</code></div>
-        <div class="v">${escapeHtml(b.value)}</div>
+        <div class="k">${escapeHtml(r.k)} <code>${escapeHtml(r.code)}</code></div>
+        <div class="v">${escapeHtml(r.v)}</div>
       </div>
-    `).join("")
-        : `<div class="emptyState"><h2>Sin campos principales</h2><p class="muted">Abre “Completo” para ver todo.</p></div>`;
+    `).join("");
+    }
 
-    // completo: todo, ordenado por items para respetar el SFM
-    const completo = $("#tab_completo");
-    const rows = buildFieldRows(entry, true);
-    completo.innerHTML = rows.map(r => `
-    <div class="kvRow">
-      <div class="k">${escapeHtml(r.k)} <code>${escapeHtml(r.code)}</code></div>
-      <div class="v">${escapeHtml(r.v)}</div>
-    </div>
-  `).join("");
-
-    // Tabs
-    detail.querySelectorAll(".tab").forEach(btn => {
+    // wire tabs
+    detail.querySelectorAll("#sourceTabs .tab").forEach(btn => {
         btn.addEventListener("click", () => {
-            detail.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
-            btn.classList.add("active");
-            const which = btn.dataset.tab;
-            $("#tab_resumen").style.display = which === "resumen" ? "" : "none";
-            $("#tab_completo").style.display = which === "completo" ? "" : "none";
+            const sid = btn.dataset.source;
+            // cuando cambiás fuente, dejamos variante en 0 si no existe
+            state.activeSourceId = sid;
+            openGroup(groupKey, sid); // actualiza hash + rerender list active
+            // renderGroup se llama en route()
         });
     });
 
-    // Copy link
+    // wire variant select
+    const sel = $("#variantSelect");
+    if (sel) {
+        sel.addEventListener("change", () => {
+            const idx = parseInt(sel.value, 10) || 0;
+            setVariantIndex(groupKey, activeSid, idx);
+            // rerender sin tocar hash
+            renderGroup(groupKey, activeSid);
+        });
+    }
+
+    // Copy link (incluye fuente seleccionada)
     $("#copyLinkBtn").addEventListener("click", async () => {
-        const url = `${location.origin}${location.pathname}#/entrada/${encodeURIComponent(entry.id)}`;
+        const sid = state.activeSourceId;
+        const url = sid
+            ? `${location.origin}${location.pathname}#/lema/${encodeURIComponent(groupKey)}/${encodeURIComponent(sid)}`
+            : `${location.origin}${location.pathname}#/lema/${encodeURIComponent(groupKey)}`;
         try {
             await navigator.clipboard.writeText(url);
             $("#copyLinkBtn").textContent = "✅ Copiado";
             setTimeout(() => $("#copyLinkBtn").textContent = "🔗 Copiar", 1200);
         } catch {
-            // fallback
             prompt("Copia el enlace:", url);
         }
     });
 }
 
-function openEntry(id) {
-    state.activeId = id;
-    location.hash = `#/entrada/${encodeURIComponent(id)}`;
-    // re-marcar activo en lista sin recalcular todo
-    renderResults(state.lastResults);
-}
+/* =========================
+   BIBLIO
+   ========================= */
 
 function renderBibliografia() {
     const detail = $("#detail");
@@ -389,9 +543,12 @@ function renderBibliografia() {
   `;
 }
 
+/* =========================
+   ROUTING
+   ========================= */
+
 function route() {
     const hash = location.hash || "#/";
-    const mEntry = hash.match(/^#\/entrada\/(.+)$/);
     const isBiblio = hash === "#/bibliografia";
 
     if (isBiblio) {
@@ -399,26 +556,46 @@ function route() {
         return;
     }
 
+    // Nueva ruta: #/lema/<groupKey>/<sourceId?>
+    const mLemma = hash.match(/^#\/lema\/([^\/]+)(?:\/([^\/]+))?$/);
+    if (mLemma) {
+        const groupKey = decodeURIComponent(mLemma[1]);
+        const sourceId = mLemma[2] ? decodeURIComponent(mLemma[2]) : null;
+
+        state.activeGroupKey = groupKey;
+        state.activeSourceId = sourceId || state.activeSourceId;
+
+        renderGroup(groupKey, sourceId);
+        renderResults(state.lastResults);
+        return;
+    }
+
+    // Compat: ruta vieja si te quedó algún link: #/entrada/<id>
+    const mEntry = hash.match(/^#\/entrada\/(.+)$/);
     if (mEntry) {
         const id = decodeURIComponent(mEntry[1]);
         const entry = state.byId.get(id);
-        if (entry) {
-            renderEntry(entry);
-            state.activeId = id;
-            renderResults(state.lastResults);
-        } else {
+        if (!entry) {
             $("#detail").innerHTML = `<div class="emptyState">
         <div class="emptyIcon">⚠️</div>
         <h2>Entrada no encontrada</h2>
         <p class="muted">Puede que el enlace sea viejo o la base de datos haya cambiado.</p>
       </div>`;
+            return;
         }
+        const gKey = groupKeyForEntry(entry);
+        const sid = entry.source_id;
+        openGroup(gKey, sid);
+        // renderGroup ocurre con hashchange (o llamá directo si querés)
         return;
     }
 
-    // default
-    // no-op
+    // default: no-op
 }
+
+/* =========================
+   SEARCH (sobre grupos)
+   ========================= */
 
 function debounce(fn, ms) {
     let t = null;
@@ -443,37 +620,45 @@ function search() {
     }
 
     const filtered = [];
-    for (const e of state.entries) {
-        if (srcFilter !== "all" && e.source_id !== srcFilter) continue;
+
+    for (const g of state.groups) {
+        if (srcFilter !== "all" && !g.bySource.has(srcFilter)) continue;
 
         let ok = false;
 
         if (mode === "exact") {
-            const hw = fold(e.headword || "");
-            ok = (hw === q);
+            ok = g._headwordsFold.has(q); // exacto contra cualquier fuente del grupo
         } else if (mode === "prefix") {
-            ok = (fold(e.headword || "").startsWith(q)) || (fold(firstField(e, "lz") || "").startsWith(q));
+            // prefix sobre el display (y también sobre el search general)
+            ok = fold(g.display).startsWith(q) || g._search.includes(q);
         } else if (mode === "contains") {
-            ok = e._search.includes(q);
+            ok = g._search.includes(q);
         } else {
             // smart
-            ok = e._search.includes(q);
+            ok = g._search.includes(q);
         }
 
-        if (ok) filtered.push(e);
+        if (ok) filtered.push(g);
     }
 
     let results = filtered;
 
     if (mode === "smart") {
+        // score por grupo: max score entre sus entradas
         results = filtered
-            .map(e => ({e, s: scoreMatch(q, e)}))
+            .map(g => {
+                let best = 0;
+                for (const e of g.entries) {
+                    const s = scoreMatch(q, e);
+                    if (s > best) best = s;
+                }
+                return { g, s: best };
+            })
             .filter(x => x.s > 0)
             .sort((a, b) => b.s - a.s)
-            .map(x => x.e);
+            .map(x => x.g);
     } else {
-        // stable-ish sort: headword then source
-        results.sort((a, b) => (a.headword || "").localeCompare(b.headword || "") || (a.source_id || "").localeCompare(b.source_id || ""));
+        results.sort((a, b) => (a.display || "").localeCompare(b.display || ""));
     }
 
     results = results.slice(0, limit);
@@ -482,6 +667,10 @@ function search() {
     $("#status").textContent = `${results.length} resultado(s) para “${qRaw}”.`;
     renderResults(results);
 }
+
+/* =========================
+   THEME + INIT
+   ========================= */
 
 function setupTheme() {
     const saved = localStorage.getItem("nawat_theme");
@@ -515,12 +704,12 @@ async function init() {
 
     $("#q").addEventListener("keydown", (e) => {
         if (e.key === "Enter" && state.lastResults.length) {
-            openEntry(state.lastResults[0].id);
+            openGroup(state.lastResults[0].key);
         }
     });
 
     try {
-        const res = await fetch("./raw_lexicon.json", {cache: "no-cache"});
+        const res = await fetch("./raw_lexicon.json", { cache: "no-cache" });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         state.data = await res.json();
 
@@ -543,16 +732,18 @@ async function init() {
         // flatten lexicons->records into entries
         const lexicons = state.data.lexicons || [];
         const entries = [];
+
         for (const lex of lexicons) {
             const sourceId = lex.source_id;
             const records = lex.records || [];
+
             for (const rec of records) {
                 if (isHousekeeping(rec)) continue;
 
                 const entry = {
                     ...rec,
                     source_id: sourceId,
-                    id: makeId(sourceId, rec.record_index),
+                    id: `${sourceId}:${rec.record_index}`,
                 };
                 entry._search = getSearchText(entry);
 
@@ -563,8 +754,11 @@ async function init() {
 
         state.entries = entries;
 
-        $("#countPill").textContent = String(entries.length);
-        $("#status").textContent = `${entries.length} entradas cargadas.`;
+        // build groups
+        buildGroups(entries);
+
+        $("#countPill").textContent = String(state.groups.length);
+        $("#status").textContent = `${state.groups.length} lemas cargados (${entries.length} registros).`;
 
         // route
         window.addEventListener("hashchange", route);
