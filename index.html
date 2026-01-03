@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>NawatCoLex — Diccionario</title>
+    <title>NawaCoLex — Diccionario</title>
     <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
@@ -12,8 +12,8 @@
         <div class="brand">
             <div class="logo" aria-hidden="true">N</div>
             <div class="brand-text">
-                <div class="brand-title">NawatCoLex</div>
-                <div class="brand-subtitle">Diccionario náwat (Nawat)</div>
+                <div class="brand-title">NawaCoLex</div>
+                <div class="brand-subtitle">Diccionario náhuat</div>
             </div>
         </div>
 
@@ -27,7 +27,7 @@
         <section class="panel left">
             <div class="searchCard">
                 <div class="searchRow">
-                    <input id="q" class="searchInput" type="search" placeholder="Buscar por palabra, variante, glosa (es/en)..." autocomplete="off" />
+                    <input id="q" class="searchInput" type="search" placeholder="Buscar palabra en náhuat, español o inglés..." autocomplete="off" />
                     <button id="clearBtn" class="btn" type="button">Limpiar</button>
                 </div>
 
@@ -61,14 +61,14 @@
                 </div>
 
                 <div class="metaRow">
-                    <div id="status" class="status">Cargando JSON…</div>
+                    <div id="status" class="status">Cargando base de datos…</div>
                     <div class="pill" id="countPill" title="Entradas indexadas">0</div>
                 </div>
             </div>
 
             <div class="resultsHeader">
                 <div class="resultsTitle">Resultados</div>
-                <div class="resultsHint">Tip: clic para abrir · Enter para ir al primero</div>
+                <div class="resultsHint"></div>
             </div>
 
             <div id="results" class="results" role="list"></div>
@@ -79,13 +79,13 @@
                 <div class="emptyState">
                     <div class="emptyIcon">🔎</div>
                     <h2>Busca una palabra</h2>
-                    <p>Escribe en la barra de búsqueda. Se buscan:</p>
+                    <p>Escribe en la barra de búsqueda. Se puede buscar por:</p>
                     <ul>
-                        <li>Headword (lx)</li>
-                        <li>Variantes (va), ortografía de la fuente (lz)</li>
-                        <li>Glosas en español (gn) e inglés (ge)</li>
+                        <li>Palabra</li>
+                        <li>Variantes de la palabra o paleografía</li>
+                        <li>Glosas náhuat, español e inglés</li>
                     </ul>
-                    <p class="muted">Después añadimos búsqueda por morfemas/prefijos/sufijos.</p>
+                    <p class="muted"></p>
                 </div>
             </div>
         </section>
@@ -93,10 +93,10 @@
 
     <footer class="footer">
         <div>
-            Hecho para GitHub Pages · Datos: JSON generado desde SFM/MDF
+            NawaCoLex
         </div>
         <div class="muted">
-            Consejo: abre el sitio desde un servidor (GitHub Pages). En local con file:// puede fallar el fetch.
+            Datos originalmente compilados por Alan R. King.
         </div>
     </footer>
 </div>

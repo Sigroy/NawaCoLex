@@ -1,8 +1,3 @@
-/* SPA estática para raw_lexicon.json (GitHub Pages friendly)
-   - Hash routing: #/entrada/<id> y #/bibliografia
-   - Búsqueda: headword (lx), lz, va, gn, ge
-*/
-
 const $ = (sel) => document.querySelector(sel);
 
 const state = {
@@ -18,7 +13,9 @@ const state = {
 
 const ES_MARKER_LABELS = {
     lx: "Lema",
-    lz: "Ortografía (fuente)",
+    di: "Dialecto",
+    so: "Fuente",
+    lz: "Paleografía",
     ps: "Categoría gramatical",
     gn: "Glosa (español)",
     ge: "Glosa (inglés)",
@@ -53,40 +50,40 @@ const ES_MARKER_LABELS = {
     pdv: "Forma de paradigma",
 };
 
-function markerLabel(code){
+function markerLabel(code) {
     return ES_MARKER_LABELS[code]
         || state.markerDefs?.[code]?.title
         || code;
 }
 
-function escapeHtml(s){
+function escapeHtml(s) {
     return (s ?? "")
-        .replaceAll("&","&amp;")
-        .replaceAll("<","&lt;")
-        .replaceAll(">","&gt;")
-        .replaceAll('"',"&quot;")
-        .replaceAll("'","&#039;");
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
 }
 
 // Normaliza para búsqueda: minúsculas + sin acentos
-function fold(str){
+function fold(str) {
     if (!str) return "";
     const s = String(str).toLowerCase();
-    try{
+    try {
         return s.normalize("NFD").replace(/\p{Diacritic}/gu, "");
-    }catch{
+    } catch {
         // fallback sin unicode property escapes
         return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
     }
 }
 
 // Crea un id estable y corto para enlazar
-function makeId(sourceId, recordIndex){
+function makeId(sourceId, recordIndex) {
     return `${sourceId}:${recordIndex}`;
 }
 
 // Heurística: filtra “headers” tipo Campbell_LX (st -1)
-function isHousekeeping(record){
+function isHousekeeping(record) {
     const st = record?.fields?.st;
     if (Array.isArray(st) && st.includes("-1")) return true;
     const hw = record?.headword || record?.fields?.lx?.[0];
@@ -94,18 +91,18 @@ function isHousekeeping(record){
     return false;
 }
 
-function firstField(record, marker){
+function firstField(record, marker) {
     const v = record?.fields?.[marker];
     return Array.isArray(v) && v.length ? v[0] : "";
 }
 
-function joinField(record, marker){
+function joinField(record, marker) {
     const v = record?.fields?.[marker];
     if (!Array.isArray(v) || !v.length) return "";
     return v.join("\n");
 }
 
-function getSearchText(record){
+function getSearchText(record) {
     // indexa lo más útil por ahora
     const parts = [];
     const pushAll = (mk) => {
@@ -125,7 +122,7 @@ function getSearchText(record){
     return fold(parts.join(" · "));
 }
 
-function scoreMatch(q, rec){
+function scoreMatch(q, rec) {
     // scoring simple para "smart"
     const hw = fold(firstField(rec, "lx") || rec.headword || "");
     const lz = fold(firstField(rec, "lz") || "");
@@ -157,11 +154,11 @@ function scoreMatch(q, rec){
     return score;
 }
 
-function renderResults(results){
+function renderResults(results) {
     const el = $("#results");
     el.innerHTML = "";
 
-    if (!results.length){
+    if (!results.length) {
         el.innerHTML = `<div class="emptyState" style="margin:8px;">
       <div class="emptyIcon">🫥</div>
       <h2>Sin resultados</h2>
@@ -170,7 +167,7 @@ function renderResults(results){
         return;
     }
 
-    for (const r of results){
+    for (const r of results) {
         const hw = escapeHtml(r.headword || "");
         const gn = escapeHtml((r.fields?.gn?.[0] || r.fields?.dn?.[0] || r.fields?.ge?.[0] || "").slice(0, 120));
         const srcName = escapeHtml(state.sourcesById.get(r.source_id)?.name || r.source_id);
@@ -204,13 +201,13 @@ function renderResults(results){
     }
 }
 
-function buildFieldRows(record, ordered=false){
+function buildFieldRows(record, ordered = false) {
     // ordered=false: agrupa por marker
     // ordered=true: respeta el orden original (items)
     const rows = [];
 
-    if (ordered && Array.isArray(record.items)){
-        for (const it of record.items){
+    if (ordered && Array.isArray(record.items)) {
+        for (const it of record.items) {
             const mk = it.marker;
             const label = markerLabel(mk);
             rows.push({
@@ -223,16 +220,16 @@ function buildFieldRows(record, ordered=false){
     }
 
     const fields = record.fields || {};
-    const keys = Object.keys(fields).sort((a,b) => a.localeCompare(b));
-    for (const mk of keys){
+    const keys = Object.keys(fields).sort((a, b) => a.localeCompare(b));
+    for (const mk of keys) {
         const label = markerLabel(mk);
         const vals = fields[mk] || [];
-        rows.push({ k: label, code: mk, v: vals.join("\n\n") });
+        rows.push({k: label, code: mk, v: vals.join("\n\n")});
     }
     return rows;
 }
 
-function renderEntry(entry){
+function renderEntry(entry) {
     const detail = $("#detail");
     const src = state.sourcesById.get(entry.source_id);
     const srcName = src?.name || entry.source_id;
@@ -282,9 +279,9 @@ function renderEntry(entry){
     const resumen = $("#tab_resumen");
     const blocks = [];
 
-    const addIf = (mk, titleOverride=null) => {
+    const addIf = (mk, titleOverride = null) => {
         const v = entry.fields?.[mk];
-        if (Array.isArray(v) && v.length){
+        if (Array.isArray(v) && v.length) {
             blocks.push({
                 label: titleOverride || markerLabel(mk),
                 code: mk,
@@ -355,32 +352,32 @@ function renderEntry(entry){
     // Copy link
     $("#copyLinkBtn").addEventListener("click", async () => {
         const url = `${location.origin}${location.pathname}#/entrada/${encodeURIComponent(entry.id)}`;
-        try{
+        try {
             await navigator.clipboard.writeText(url);
             $("#copyLinkBtn").textContent = "✅ Copiado";
             setTimeout(() => $("#copyLinkBtn").textContent = "🔗 Copiar", 1200);
-        }catch{
+        } catch {
             // fallback
             prompt("Copia el enlace:", url);
         }
     });
 }
 
-function openEntry(id){
+function openEntry(id) {
     state.activeId = id;
     location.hash = `#/entrada/${encodeURIComponent(id)}`;
     // re-marcar activo en lista sin recalcular todo
     renderResults(state.lastResults);
 }
 
-function renderBibliografia(){
+function renderBibliografia() {
     const detail = $("#detail");
     const sources = state.data?.sources || [];
     detail.innerHTML = `
     <div class="detailHeader">
       <div class="detailTitle">
         <h1>Bibliografía</h1>
-        <div class="sub">Fuentes disponibles en el JSON (para mostrar en el sitio).</div>
+        <div class="sub">Fuentes disponibles en la base de datos.</div>
       </div>
     </div>
     ${sources.map(s => `
@@ -392,28 +389,28 @@ function renderBibliografia(){
   `;
 }
 
-function route(){
+function route() {
     const hash = location.hash || "#/";
     const mEntry = hash.match(/^#\/entrada\/(.+)$/);
     const isBiblio = hash === "#/bibliografia";
 
-    if (isBiblio){
+    if (isBiblio) {
         renderBibliografia();
         return;
     }
 
-    if (mEntry){
+    if (mEntry) {
         const id = decodeURIComponent(mEntry[1]);
         const entry = state.byId.get(id);
-        if (entry){
+        if (entry) {
             renderEntry(entry);
             state.activeId = id;
             renderResults(state.lastResults);
-        }else{
+        } else {
             $("#detail").innerHTML = `<div class="emptyState">
         <div class="emptyIcon">⚠️</div>
         <h2>Entrada no encontrada</h2>
-        <p class="muted">Puede que el enlace sea viejo o el JSON haya cambiado.</p>
+        <p class="muted">Puede que el enlace sea viejo o la base de datos haya cambiado.</p>
       </div>`;
         }
         return;
@@ -423,7 +420,7 @@ function route(){
     // no-op
 }
 
-function debounce(fn, ms){
+function debounce(fn, ms) {
     let t = null;
     return (...args) => {
         clearTimeout(t);
@@ -431,14 +428,14 @@ function debounce(fn, ms){
     };
 }
 
-function search(){
+function search() {
     const qRaw = $("#q").value.trim();
     const q = fold(qRaw);
     const mode = $("#mode").value;
     const limit = parseInt($("#limit").value, 10);
     const srcFilter = $("#sourceFilter").value;
 
-    if (!q){
+    if (!q) {
         state.lastResults = [];
         $("#status").textContent = `Listo.`;
         renderResults([]);
@@ -446,17 +443,17 @@ function search(){
     }
 
     const filtered = [];
-    for (const e of state.entries){
+    for (const e of state.entries) {
         if (srcFilter !== "all" && e.source_id !== srcFilter) continue;
 
         let ok = false;
 
-        if (mode === "exact"){
+        if (mode === "exact") {
             const hw = fold(e.headword || "");
             ok = (hw === q);
-        } else if (mode === "prefix"){
+        } else if (mode === "prefix") {
             ok = (fold(e.headword || "").startsWith(q)) || (fold(firstField(e, "lz") || "").startsWith(q));
-        } else if (mode === "contains"){
+        } else if (mode === "contains") {
             ok = e._search.includes(q);
         } else {
             // smart
@@ -468,15 +465,15 @@ function search(){
 
     let results = filtered;
 
-    if (mode === "smart"){
+    if (mode === "smart") {
         results = filtered
-            .map(e => ({ e, s: scoreMatch(q, e) }))
+            .map(e => ({e, s: scoreMatch(q, e)}))
             .filter(x => x.s > 0)
-            .sort((a,b) => b.s - a.s)
+            .sort((a, b) => b.s - a.s)
             .map(x => x.e);
     } else {
         // stable-ish sort: headword then source
-        results.sort((a,b) => (a.headword||"").localeCompare(b.headword||"") || (a.source_id||"").localeCompare(b.source_id||""));
+        results.sort((a, b) => (a.headword || "").localeCompare(b.headword || "") || (a.source_id || "").localeCompare(b.source_id || ""));
     }
 
     results = results.slice(0, limit);
@@ -486,7 +483,7 @@ function search(){
     renderResults(results);
 }
 
-function setupTheme(){
+function setupTheme() {
     const saved = localStorage.getItem("nawat_theme");
     state.theme = saved || "dark";
     document.documentElement.dataset.theme = state.theme === "light" ? "light" : "";
@@ -500,7 +497,7 @@ function setupTheme(){
     });
 }
 
-async function init(){
+async function init() {
     setupTheme();
 
     $("#q").addEventListener("input", debounce(search, 120));
@@ -517,13 +514,13 @@ async function init(){
     });
 
     $("#q").addEventListener("keydown", (e) => {
-        if (e.key === "Enter" && state.lastResults.length){
+        if (e.key === "Enter" && state.lastResults.length) {
             openEntry(state.lastResults[0].id);
         }
     });
 
-    try{
-        const res = await fetch("./raw_lexicon.json", { cache: "no-cache" });
+    try {
+        const res = await fetch("./raw_lexicon.json", {cache: "no-cache"});
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         state.data = await res.json();
 
@@ -536,7 +533,7 @@ async function init(){
 
         // fill source filter
         const sf = $("#sourceFilter");
-        for (const s of sources){
+        for (const s of sources) {
             const opt = document.createElement("option");
             opt.value = s.id;
             opt.textContent = s.name || s.id;
@@ -546,10 +543,10 @@ async function init(){
         // flatten lexicons->records into entries
         const lexicons = state.data.lexicons || [];
         const entries = [];
-        for (const lex of lexicons){
+        for (const lex of lexicons) {
             const sourceId = lex.source_id;
             const records = lex.records || [];
-            for (const rec of records){
+            for (const rec of records) {
                 if (isHousekeeping(rec)) continue;
 
                 const entry = {
@@ -567,19 +564,19 @@ async function init(){
         state.entries = entries;
 
         $("#countPill").textContent = String(entries.length);
-        $("#status").textContent = `Listo. ${entries.length} entradas cargadas.`;
+        $("#status").textContent = `${entries.length} entradas cargadas.`;
 
         // route
         window.addEventListener("hashchange", route);
         route();
 
-    }catch(err){
+    } catch (err) {
         console.error(err);
-        $("#status").textContent = "Error cargando el JSON. Revisa que raw_lexicon.json esté junto al index.html.";
+        $("#status").textContent = "Error cargando la base de datos.";
         $("#detail").innerHTML = `<div class="emptyState">
       <div class="emptyIcon">💥</div>
-      <h2>No se pudo cargar raw_lexicon.json</h2>
-      <p class="muted">Esto suele pasar si abres el archivo con <code>file://</code>. Sube a GitHub Pages o usa un servidor local.</p>
+      <h2>No se pudo cargar la base de datos</h2>
+      <p class="muted"></p>
     </div>`;
     }
 }
