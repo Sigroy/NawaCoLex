@@ -10,10 +10,12 @@ from typing import Any, Dict, List, Optional, Tuple
 import pdfplumber
 
 # -------------------------
-# POS (más robusto)
+# Config / POS
 # -------------------------
 
-# Para matching interno usamos “claves” normalizadas (sin puntos, minúsculas).
+BULLETS = {"•", "·", "∙", "◦", "●", "○", "▪", "–", "-"}
+
+# POS "base" (normalizado sin puntos)
 POS_KEYS = {
     "n",
     "adj",
@@ -23,78 +25,70 @@ POS_KEYS = {
     "sus",
     "verb",
     "preverb",
-    "sus ina",  # “sus ina.”
     "ina",
     "pron",
     "prep",
     "conj",
+    # multi-token
+    "sus ina",
+    # a veces aparece como "v tr."
+    "v tr",
 }
 
 def pos_key(token: str) -> str:
-    # normaliza: lower + quita puntuación final típica
+    # normaliza token para comparar POS
     return token.strip().lower().rstrip(".,;:")
 
-def split_pos(rest: str) -> Tuple[Optional[str], str]:
+def split_pos_from_tokens(tokens: List[str], j: int) -> Tuple[Optional[str], int]:
     """
-    Devuelve (pos, tail). pos se conserva “como aparece” (ej: 'sus.' / 'vi.'),
-    pero el reconocimiento se hace con claves normalizadas.
+    Intenta reconocer POS en tokens[j] (1 token) o tokens[j:j+2] (2 tokens).
+    Retorna (pos_str, pos_len).
     """
-    r = rest.strip()
-    parts = r.split()
-    if not parts:
-        return None, rest.strip()
+    if j >= len(tokens):
+        return None, 0
 
-    # Caso 2 tokens: "sus ina."
-    if len(parts) >= 2:
-        k2 = f"{pos_key(parts[0])} {pos_key(parts[1])}"
+    # 2 tokens: "sus ina."
+    if j + 1 < len(tokens):
+        k2 = f"{pos_key(tokens[j])} {pos_key(tokens[j+1])}"
         if k2 in POS_KEYS:
-            pos = f"{parts[0]} {parts[1]}".strip()
-            tail = r[len(pos):].strip()
-            return pos, tail
+            return f"{tokens[j]} {tokens[j+1]}", 2
 
-        # Caso especial: "v tr." / "v. tr."
-        if pos_key(parts[0]) in {"v", "v."} and pos_key(parts[1]) in {"tr", "tr.", "trans", "trans."}:
-            pos = f"{parts[0]} {parts[1]}".strip()
-            tail = r[len(pos):].strip()
-            return "vt.", tail  # lo guardamos como vt.
+        # "v tr." => tratémoslo como vt.
+        if k2 == "v tr":
+            return "vt.", 2
 
-    # Caso 1 token
-    k1 = pos_key(parts[0])
+    # 1 token
+    k1 = pos_key(tokens[j])
     if k1 in POS_KEYS:
-        pos = parts[0]
-        tail = r[len(parts[0]):].strip()
-        return pos, tail
+        # normaliza un poco salida (mantén como en texto)
+        return tokens[j], 1
 
-    return None, rest.strip()
+    return None, 0
 
 
 # -------------------------
-# Regex / parsing
+# Regex helpers
 # -------------------------
 
-START_RE = re.compile(
-    r"""
-    ^\s*
-    (?P<bullet>[•·∙◦●○▪–-])?
-    \s*
-    (?P<lema>[A-Za-zÁÉÍÓÚÜÑáéíóúüñʼ’:\-]+(?:\s*,\s*[A-Za-zÁÉÍÓÚÜÑáéíóúüñʼ’:\-]+)*)
-    \s+
-    (?P<rest>.+)
-    $""",
-    re.VERBOSE,
-)
+# Detecta token dialecto [Cuis.] (lo esperamos justo antes del POS)
+DIALECT_TOKEN_RE = re.compile(r"^\[(?P<dialect>[^\]]+)\]$")
 
-DIALECT_RE = re.compile(r"^\s*\[(?P<dialect>[^\]]+)\]\s*(?P<after>.*)$")
+# Prefijo de sentido: "1." / "2." / "(1)" / "(2)" / "1)" / "2)"
+SENSE_TOKEN_RE = re.compile(r"^(?:\(\d+\)|\d+)[.)]$")
+
+# científico: [Bixa orellana] (opcional punto final)
 SC_RE = re.compile(r"\[(?P<sc>[A-Z][a-z]+(?:\s+[a-z][a-z\-]+)+)\.?\]")
+
 
 def normalize_space(s: str) -> str:
     return re.sub(r"[ \t]+", " ", s).strip()
 
+
 def join_lines_safely(lines: List[str]) -> str:
     """
-    Une líneas conservando saltos:
-    - si la línea anterior termina en '-' => une sin espacio (palabra cortada)
-    - si no => conserva como líneas separadas (con '\n')
+    Une líneas respetando cortes por salto:
+    - si línea termina en '-' (corte de palabra), junta sin espacio
+    - si no, junta con '\n' para conservar estructura del diccionario
     """
     out: List[str] = []
     for ln in lines:
@@ -113,6 +107,7 @@ def join_lines_safely(lines: List[str]) -> str:
             out.append(ln)
     return "\n".join(out).strip()
 
+
 def extract_pdf_lines(pdf_path: Path) -> List[str]:
     lines: List[str] = []
     with pdfplumber.open(str(pdf_path)) as pdf:
@@ -121,35 +116,86 @@ def extract_pdf_lines(pdf_path: Path) -> List[str]:
             if not text:
                 continue
             for ln in text.splitlines():
-                ln = ln.rstrip()
-                lines.append(ln if ln else "")
+                lines.append(ln.rstrip() if ln else "")
     return lines
 
-def looks_like_entry_start(line: str) -> Optional[Dict[str, str]]:
-    m = START_RE.match(line)
-    if not m:
+
+def strip_leading_bullet(line: str) -> str:
+    s = line.lstrip()
+    if s and s[0] in BULLETS:
+        return s[1:].lstrip()
+    return s
+
+
+def looks_like_entry_start(line: str, max_pos_index: int = 7) -> Optional[Dict[str, str]]:
+    """
+    Detecta inicio de entrada buscando POS temprano.
+    Soporta lemas multi-palabra: 'achtu tamachtiluyan n ...'
+    Soporta variantes separadas por coma: 'achkaw, echkaw sus ina. ...'
+    Soporta dialecto como token: '[Cuis.]'
+    Soporta sentido antes de POS: 'achiut 1. n ...'
+    """
+    s = strip_leading_bullet(line).strip()
+    if not s:
         return None
 
-    lemma_raw = normalize_space(m.group("lema"))  # <-- FIX: ahora sí existe
-    rest = m.group("rest").strip()
-
-    # dialecto: "[Cuis.] adj. ..."
-    dialect = ""
-    m_d = DIALECT_RE.match(rest)
-    if m_d:
-        dialect = normalize_space(m_d.group("dialect"))
-        rest = (m_d.group("after") or "").strip()
-
-    pos, tail = split_pos(rest)
-    if not pos:
+    tokens = s.split()
+    if len(tokens) < 2:
         return None
 
-    return {
-        "lemma_raw": lemma_raw,
-        "dialect": dialect,
-        "pos": pos,
-        "tail": tail,
-    }
+    # Busca un POS en una ventana pequeña al inicio (heurística muy efectiva)
+    upper = min(len(tokens) - 1, max_pos_index)
+    for j in range(1, upper + 1):
+        pos, pos_len = split_pos_from_tokens(tokens, j)
+        if not pos:
+            continue
+
+        # tokens antes de POS
+        before = tokens[:j]
+        after_tokens = tokens[j + pos_len :]
+        after = " ".join(after_tokens).strip()
+
+        # extrae sentido justo antes del POS (en before)
+        sense_tokens: List[str] = []
+        i = len(before) - 1
+        while i >= 0 and SENSE_TOKEN_RE.match(before[i]):
+            sense_tokens.insert(0, before[i])
+            i -= 1
+        sense_prefix = " ".join(sense_tokens).strip()
+        lemma_tokens = before[: i + 1]
+
+        if not lemma_tokens:
+            continue
+
+        # dialecto como token final del lema: "[Cuis.]"
+        dialect = ""
+        if lemma_tokens and DIALECT_TOKEN_RE.match(lemma_tokens[-1]):
+            m = DIALECT_TOKEN_RE.match(lemma_tokens[-1])
+            dialect = normalize_space(m.group("dialect")) if m else ""
+            lemma_tokens = lemma_tokens[:-1]
+            if not lemma_tokens:
+                continue
+
+        lemma_raw = normalize_space(" ".join(lemma_tokens))
+
+        # validación ligera: evitar falsos positivos locos
+        # (un lema debería tener al menos una letra)
+        if not re.search(r"[A-Za-zÁÉÍÓÚÜÑáéíóúüñʼ’]", lemma_raw):
+            continue
+
+        tail = after
+        if sense_prefix:
+            tail = f"{sense_prefix} {tail}".strip()
+
+        return {
+            "lemma_raw": lemma_raw,
+            "dialect": dialect,
+            "pos": pos,
+            "tail": tail,
+        }
+
+    return None
+
 
 def parse_pdf_dictionary_to_records(lines: List[str]) -> List[Dict[str, Any]]:
     records: List[Dict[str, Any]] = []
@@ -163,7 +209,7 @@ def parse_pdf_dictionary_to_records(lines: List[str]) -> List[Dict[str, Any]]:
 
         definition = join_lines_safely(cur_def_lines).strip()
 
-        # saca científico si aparece
+        # saca científico si aparece dentro
         sc = ""
         m_sc = SC_RE.search(definition)
         if m_sc:
@@ -217,7 +263,11 @@ def parse_pdf_dictionary_to_records(lines: List[str]) -> List[Dict[str, Any]]:
         if start:
             flush()
 
+            # variantes separadas por coma dentro del lema (y el lema puede ser multi-palabra)
+            # ej: "achkaw, echkaw" o "achijchin, atzijtzin"
             parts = [normalize_space(p) for p in start["lemma_raw"].split(",")]
+            parts = [p for p in parts if p]
+
             lx = parts[0]
             va = parts[1:] if len(parts) > 1 else []
 
@@ -239,6 +289,7 @@ def parse_pdf_dictionary_to_records(lines: List[str]) -> List[Dict[str, Any]]:
     flush()
     return records
 
+
 def merge_into_raw_lexicon(base: Dict[str, Any], new_source: Dict[str, Any], new_lexicon: Dict[str, Any]) -> Dict[str, Any]:
     out = dict(base)
     out.setdefault("sources", [])
@@ -256,15 +307,18 @@ def merge_into_raw_lexicon(base: Dict[str, Any], new_source: Dict[str, Any], new
 
     return out
 
+
 def main():
-    ap = argparse.ArgumentParser(description="Convierte un diccionario PDF a tu JSON de lexicon y opcionalmente lo fusiona con raw_lexicon.json.")
+    ap = argparse.ArgumentParser(
+        description="Convierte un diccionario PDF (texto real) a JSON de lexicon y opcionalmente lo fusiona con raw_lexicon.json."
+    )
     ap.add_argument("pdf", help="Ruta al PDF.")
-    ap.add_argument("--source-id", required=True, help='ID corto (ej: "DICC_PDF").')
-    ap.add_argument("--source-name", required=True, help='Nombre (ej: "Diccionario X (PDF)").')
+    ap.add_argument("--source-id", required=True, help='ID corto para la fuente (ej: "DICC_PDF").')
+    ap.add_argument("--source-name", required=True, help='Nombre para la fuente (ej: "Diccionario X (PDF)").')
     ap.add_argument("--bibliography", required=True, help="Bibliografía (texto).")
-    ap.add_argument("--out", required=True, help="Salida JSON.")
-    ap.add_argument("--merge-into", help="raw_lexicon.json base (opcional).")
-    ap.add_argument("--pretty", action="store_true", help="Indentado bonito.")
+    ap.add_argument("--out", required=True, help="Salida JSON (archivo).")
+    ap.add_argument("--merge-into", help="Si lo das, lee este raw_lexicon.json y escribe uno nuevo con la fuente agregada en --out.")
+    ap.add_argument("--pretty", action="store_true", help="JSON bonito (indentado).")
     args = ap.parse_args()
 
     pdf_path = Path(args.pdf)
@@ -277,19 +331,30 @@ def main():
 
     records = parse_pdf_dictionary_to_records(lines)
 
-    new_source = {"id": args.source_id, "name": args.source_name, "bibliography": args.bibliography}
-    new_lexicon = {"source_id": args.source_id, "records": records}
+    new_source = {
+        "id": args.source_id,
+        "name": args.source_name,
+        "bibliography": args.bibliography,
+    }
+    new_lexicon = {
+        "source_id": args.source_id,
+        "records": records,
+    }
 
     if args.merge_into:
         base_path = Path(args.merge_into)
         base = json.loads(base_path.read_text(encoding="utf-8"))
         payload = merge_into_raw_lexicon(base, new_source, new_lexicon)
     else:
-        payload = {"sources": [new_source], "lexicons": [new_lexicon]}
+        payload = {
+            "sources": [new_source],
+            "lexicons": [new_lexicon],
+        }
 
     indent = 2 if args.pretty else None
     Path(args.out).write_text(json.dumps(payload, ensure_ascii=False, indent=indent), encoding="utf-8")
     print(f"OK: {len(records)} registros extraídos. Escrito: {args.out}")
+
 
 if __name__ == "__main__":
     main()
