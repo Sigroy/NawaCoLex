@@ -16,9 +16,9 @@ New (requested)
 - --drop-sh / --extract-sh: handle \\_sh as metadata (or drop it)
 
 Usage
-  python sfm_to_json.py "D:\\...\\python-script" --glob "*.txt" --out raw_lexicon.json --pretty --minimal --drop-sh
-  python sfm_to_json.py "D:\\...\\python-script" --glob "*.txt" --out raw_lexicon.json --pretty --minimal --extract-sh
-  python sfm_to_json.py file1.txt file2.txt --out raw_lexicon.json --minimal --drop-sh
+  python sfm_to_json.py "D:\\...\\python-script" --glob "*.txt" --out raw_lexicon_old.json --pretty --minimal --drop-sh
+  python sfm_to_json.py "D:\\...\\python-script" --glob "*.txt" --out raw_lexicon_old.json --pretty --minimal --extract-sh
+  python sfm_to_json.py file1.txt file2.txt --out raw_lexicon_old.json --minimal --drop-sh
 """
 
 from __future__ import annotations
@@ -179,13 +179,39 @@ for k, (dbn, title) in IF_SUBMARKERS.items():
 
 
 def decode_bytes(data: bytes) -> Tuple[str, str]:
-    """Try decoding bytes robustly. Returns (text, encoding_used)."""
-    for enc in ("utf-8-sig", "utf-8"):
+    """
+    Robust decoding for files that may be mixed-encoding by line:
+      - Try to decode each line as UTF-8 (keeps Greek/Hebrew).
+      - If that fails for that line, decode it as cp1252 (fixes Spanish ñ/á/é/ó/ú, etc.).
+      - If that still fails, fallback to latin-1 with replacement.
+
+    Returns (full_text, label_for_debugging).
+    """
+    lines = data.splitlines(keepends=False)
+
+    # strip UTF-8 BOM if present on first line
+    if lines and lines[0].startswith(b"\xef\xbb\xbf"):
+        lines[0] = lines[0][3:]
+
+    out_lines: List[str] = []
+    for bline in lines:
+        if bline == b"":
+            out_lines.append("")
+            continue
+
         try:
-            return data.decode(enc), enc
+            out_lines.append(bline.decode("utf-8"))
+            continue
         except UnicodeDecodeError:
             pass
-    return data.decode("latin-1", errors="replace"), "latin-1(replace)"
+
+        try:
+            out_lines.append(bline.decode("cp1252"))
+            continue
+        except UnicodeDecodeError:
+            out_lines.append(bline.decode("latin-1", errors="replace"))
+
+    return "\n".join(out_lines), "per-line: utf-8 else cp1252 else latin-1"
 
 
 def iter_files(inputs: List[Path], glob_pattern: str) -> List[Path]:
