@@ -15,6 +15,7 @@ import pdfplumber
 
 BULLETS = {"•", "·", "∙", "◦", "●", "○", "▪", "–", "-"}
 
+# TODO: Añadir más POS según el diccionario
 # POS "base" (normalizado sin puntos)
 POS_KEYS = {
     "n",
@@ -22,6 +23,8 @@ POS_KEYS = {
     "adv",
     "vi",
     "vt",
+    "v dit",
+    "conj subord",
     "sus",
     "verb",
     "preverb",
