@@ -176,7 +176,7 @@ function buildFieldRows(record) {
     for (const mk of keys) {
         const label = markerLabel(mk);
         const vals = fields[mk] || [];
-        rows.push({ k: label, code: mk, v: vals.join("\n\n") });
+        rows.push({k: label, code: mk, v: vals.join("\n\n")});
     }
     return rows;
 }
@@ -282,7 +282,10 @@ function renderResults(groups) {
         let snippet = "";
         for (const e of g.entries) {
             const s = pickBestSnippetFromEntry(e);
-            if (s) { snippet = s; break; }
+            if (s) {
+                snippet = s;
+                break;
+            }
         }
         const snip = escapeHtml((snippet || "").slice(0, 120));
 
@@ -338,7 +341,8 @@ function openGroup(groupKey, sourceId = null) {
             sid = currentFilter;
         } else {
             // primera fuente por nombre
-            const sids = Array.from(g.bySource.keys()).sort((a, b) => shortSourceName(a).localeCompare(shortSourceName(b)));
+            const sids = Array.from(g.bySource.keys())
+                .sort((a, b) => shortSourceName(a).localeCompare(shortSourceName(b)));
             sid = sids[0] || null;
         }
     }
@@ -410,12 +414,11 @@ function renderGroup(groupKey, preferredSourceId = null) {
     let biblio = "";
     if (entry) {
         const src = state.sourcesById.get(entry.source_id);
-        const srcName = src?.name || entry.source_id;
         biblio = src?.bibliography || "";
 
-        const ps = firstField(entry, "ps");
-        const di = firstField(entry, "di");
-        const lz = firstField(entry, "lz");
+        // const ps = firstField(entry, "ps");
+        // const di = firstField(entry, "di");
+        // const lz = firstField(entry, "lz");
     } else {
         headerSub = `Fuentes: ${sourcesLine}`;
     }
@@ -486,7 +489,6 @@ function renderGroup(groupKey, preferredSourceId = null) {
     detail.querySelectorAll("#sourceTabs .tab").forEach(btn => {
         btn.addEventListener("click", () => {
             const sid = btn.dataset.source;
-            // cuando cambiás fuente, dejamos variante en 0 si no existe
             state.activeSourceId = sid;
             openGroup(groupKey, sid); // actualiza hash + rerender list active
             // renderGroup se llama en route()
@@ -586,7 +588,6 @@ function route() {
         const gKey = groupKeyForEntry(entry);
         const sid = entry.source_id;
         openGroup(gKey, sid);
-        // renderGroup ocurre con hashchange (o llamá directo si querés)
         return;
     }
 
@@ -613,6 +614,22 @@ function search() {
     const srcFilter = $("#sourceFilter").value;
 
     if (!q) {
+        if (srcFilter !== "all") {
+            // state.groups ya está alfabético por display
+            const base = state.groups.filter(g => g.bySource.has(srcFilter));
+            const results = base.slice(0, limit);
+
+            state.lastResults = results;
+
+            $("#status").textContent =
+                `Mostrando ${results.length} de ${base.length} lemas en “${shortSourceName(srcFilter)}”. ` +
+                `Escribe para filtrar dentro de esta fuente.`;
+
+            renderResults(results);
+            return;
+        }
+
+        // comportamiento actual para “Todas”
         state.lastResults = [];
         $("#status").textContent = `Listo.`;
         renderResults([]);
@@ -652,7 +669,7 @@ function search() {
                     const s = scoreMatch(q, e);
                     if (s > best) best = s;
                 }
-                return { g, s: best };
+                return {g, s: best};
             })
             .filter(x => x.s > 0)
             .sort((a, b) => b.s - a.s)
@@ -692,7 +709,14 @@ async function init() {
     $("#q").addEventListener("input", debounce(search, 120));
     $("#mode").addEventListener("change", search);
     $("#limit").addEventListener("change", search);
-    $("#sourceFilter").addEventListener("change", search);
+
+    $("#sourceFilter").addEventListener("change", () => {
+        const sfVal = $("#sourceFilter").value;
+        $("#q").placeholder = (sfVal === "all")
+            ? "Buscar palabra en náhuat, español o inglés..."
+            : `Buscar dentro de “${shortSourceName(sfVal)}”… (vacío = explorar)`;
+        search();
+    });
 
     $("#clearBtn").addEventListener("click", () => {
         $("#q").value = "";
@@ -709,7 +733,7 @@ async function init() {
     });
 
     try {
-        const res = await fetch("./raw_lexicon.json", { cache: "no-cache" });
+        const res = await fetch("./raw_lexicon.json", {cache: "no-cache"});
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         state.data = await res.json();
 
